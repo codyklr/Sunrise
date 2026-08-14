@@ -187,6 +187,7 @@
     <ClCompile Include="src\client\ui\runtime\client_ui_module_runtime.cpp" />
     <ClCompile Include="src\client\ui\teleport\teleport_panel.cpp" />
     <ClCompile Include="src\client\teleport\teleport_settings_store.cpp" />
+    <ClCompile Include="src\client\hooks\noclip\horizontal_noclip.cpp" />
     <ClCompile Include="src\client\hooks\teleport\teleport_lifecycle.cpp" />
     <ClCompile Include="src\client\hooks\teleport\teleport_move.cpp" />
     <ClCompile Include="src\client\hooks\teleport\teleport_action_key.cpp" />
@@ -672,6 +673,7 @@
     <ClInclude Include="src\core\ui\layout\credits\sunrise_credits_badge.h" />
     <ClInclude Include="src\client\runtime\runtime.h" />
     <ClInclude Include="src\client\teleport\teleport_settings_store.h" />
+    <ClInclude Include="src\client\hooks\noclip\runtime.h" />
     <ClInclude Include="src\client\hooks\teleport\internal.h" />
     <ClInclude Include="src\client\hooks\teleport\runtime.h" />
     <ClInclude Include="src\client\ui\teleport\teleport_panel.h" />

@@ -18,6 +18,8 @@ struct Settings {
     bool enabled{false};
     float distance{kDefaultDistance};
     std::uint32_t virtualKey{kNoKey};
+    bool noclipEnabled{false};
+    std::uint32_t noclipToggleKey{kNoKey};
 };
 
 /**

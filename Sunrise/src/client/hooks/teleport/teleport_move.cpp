@@ -17,6 +17,7 @@
 #include "../../../state/account/account_state.h"
 #include "../../../state/runtime/runtime.h"
 #include "../../teleport/teleport_settings_store.h"
+#include "../noclip/runtime.h"
 #include "../polled_input/runtime.h"
 #include "internal.h"
 #include "runtime.h"
@@ -407,7 +408,9 @@ void apply_pending(void* component) noexcept {
         return;
     }
     g_requested.store(false, std::memory_order_release);
-    (void)perform_move(physics);
+    if (perform_move(physics)) {
+        noclip::invalidate_target();
+    }
 }
 
 /** Runs the move for a request no physics tick collected. */
@@ -426,6 +429,7 @@ void force_pending() noexcept {
     if (!perform_move(physics)) {
         return;
     }
+    noclip::invalidate_target();
     invoke_sync(physics);
     core::log::write(
         core::log::Channel::client, core::log::Level::info, "ev=teleport stage=force result=ok");
