@@ -28,6 +28,13 @@ If you want to support my open source work you can find the means on my
 All content released under this project is free and open source. If someone is trying to sell you
 something you are getting scammed.
 
+## Rules
+Issues are for bug reports only.
+
+PRs are for pull requests only.
+
+Do not go and argue/chat there, you can do that on the discord.
+
 ## Contributing
 
 Pull Requests are welcome. Please follow these rules:
