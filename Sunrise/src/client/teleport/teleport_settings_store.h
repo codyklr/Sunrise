@@ -12,6 +12,11 @@ inline constexpr float kMinimumDistance = 1.0F;
 inline constexpr float kMaximumDistance = 100.0F;
 /** No key is bound until one is picked, so a fresh install cannot teleport by accident. */
 inline constexpr std::uint32_t kNoKey = 0;
+/** Default free-flight speed, in world units per second. */
+inline constexpr float kDefaultNoclipFlySpeed = 20.0F;
+/** Bounds avoid an imperceptible crawl and a single-frame leap through a destination. */
+inline constexpr float kMinimumNoclipFlySpeed = 1.0F;
+inline constexpr float kMaximumNoclipFlySpeed = 100.0F;
 
 /** Runtime teleport configuration. This module owns it; Core settings do not carry it. */
 struct Settings {
@@ -20,6 +25,8 @@ struct Settings {
     std::uint32_t virtualKey{kNoKey};
     bool noclipEnabled{false};
     std::uint32_t noclipToggleKey{kNoKey};
+    bool noclipFlyEnabled{false};
+    float noclipFlySpeed{kDefaultNoclipFlySpeed};
 };
 
 /**

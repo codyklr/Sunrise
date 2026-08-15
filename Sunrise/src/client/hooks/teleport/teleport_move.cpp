@@ -8,6 +8,7 @@
 
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -62,6 +63,8 @@ CameraSingleton g_cameraSingleton{};
 
 /** Written by the camera hook and read by the physics hook. Both run on the same thread. */
 std::array<float, kVectorLanes> g_forward{};
+/** Horizontal camera direction for independent movement hooks that may run on another thread. */
+std::atomic<std::uint64_t> g_horizontalForward{};
 
 /**
  * Reads one value out of game memory without faulting on a torn pointer.
@@ -339,6 +342,7 @@ void clear_targets() noexcept {
     g_cameraSingleton = nullptr;
     g_requested.store(false, std::memory_order_release);
     g_forwardValid.store(false, std::memory_order_release);
+    g_horizontalForward.store(0, std::memory_order_release);
     g_keyDown.store(false, std::memory_order_relaxed);
     g_requestAge.store(0, std::memory_order_relaxed);
     g_active.store(false, std::memory_order_relaxed);
@@ -359,7 +363,20 @@ void capture_forward(std::uint32_t playerIndex) noexcept {
         return;
     }
     g_forward = forward;
+    g_horizontalForward.store(
+        std::bit_cast<std::uint64_t>(std::array<float, 2>{forward[0], forward[1]}),
+        std::memory_order_release);
     g_forwardValid.store(true, std::memory_order_release);
+}
+
+/** Copies the latest camera X/Y forward vector for a movement hook. */
+bool horizontal_camera_forward(std::array<float, 2>& output) noexcept {
+    if (!g_forwardValid.load(std::memory_order_acquire)) {
+        return false;
+    }
+    output = std::bit_cast<std::array<float, 2>>(
+        g_horizontalForward.load(std::memory_order_acquire));
+    return true;
 }
 
 /** Latches one teleport request if the bound key went down this frame. */

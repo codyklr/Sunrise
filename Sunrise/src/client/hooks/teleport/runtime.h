@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -34,6 +35,13 @@ void uninstall() noexcept;
  * @param playerIndex Player the camera pose block belongs to.
  */
 void capture_forward(std::uint32_t playerIndex) noexcept;
+
+/**
+ * Copies the latest camera X/Y forward vector for movement systems that need a horizontal heading.
+ * @param output Receives the unnormalised horizontal direction.
+ * @return True when the camera hook has published at least one vector.
+ */
+[[nodiscard]] bool horizontal_camera_forward(std::array<float, 2>& output) noexcept;
 
 /** Latches one teleport request if the bound key went down this frame. */
 void poll_request() noexcept;

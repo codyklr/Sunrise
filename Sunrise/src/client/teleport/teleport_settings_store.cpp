@@ -1,4 +1,8 @@
-// Runtime-safe movement settings persisted beside the module after every interface change.
+/**
+ * The teleport configuration store. It is separate from Core settings because the interface
+ * changes these values while the game runs and saves each change at once. Core settings are
+ * parsed once into an immutable global.
+ */
 
 #include "teleport_settings_store.h"
 
@@ -18,7 +22,7 @@ namespace {
 
 /** The module-owned configuration file, beside the generated settings and logs. */
 constexpr std::wstring_view kFileSuffix = L"\\teleport.json";
-/** The document is a few scalars, so one small buffer covers both reading and writing. */
+/** The document is 3 scalars, so one small buffer covers both reading and writing. */
 constexpr std::size_t kFileCapacity = 512;
 /** Longest scalar accepted from the file. Anything longer is malformed rather than large. */
 constexpr std::size_t kScalarCapacity = 32;
@@ -34,7 +38,9 @@ bool g_pathResolved{};
 [[nodiscard]] bool valid(const Settings& settings) noexcept {
     return settings.distance >= kMinimumDistance && settings.distance <= kMaximumDistance
            && settings.virtualKey <= kMaximumVirtualKey
-           && settings.noclipToggleKey <= kMaximumVirtualKey;
+           && settings.noclipToggleKey <= kMaximumVirtualKey
+           && settings.noclipFlySpeed >= kMinimumNoclipFlySpeed
+           && settings.noclipFlySpeed <= kMaximumNoclipFlySpeed;
 }
 
 /** @param reason Key naming the step that failed. */
@@ -122,6 +128,12 @@ void parse(std::string_view text, Settings& output) noexcept {
         output.noclipToggleKey =
             static_cast<std::uint32_t>(std::strtoul(buffer.data(), nullptr, 0));
     }
+    if (scalar_for(text, "\"noclip_fly_enabled\"", scalar)) {
+        output.noclipFlyEnabled = scalar.starts_with("true");
+    }
+    if (scalar_for(text, "\"noclip_fly_speed\"", scalar) && terminated(scalar, buffer)) {
+        output.noclipFlySpeed = std::strtof(buffer.data(), nullptr);
+    }
 }
 
 /**
@@ -140,12 +152,16 @@ void parse(std::string_view text, Settings& output) noexcept {
                                    "{\n  \"enabled\": %s,\n  \"distance\": %.3f,\n"
                                    "  \"virtual_key\": %u,\n"
                                    "  \"noclip_enabled\": %s,\n"
-                                   "  \"noclip_toggle_key\": %u\n}\n",
+                                   "  \"noclip_toggle_key\": %u,\n"
+                                   "  \"noclip_fly_enabled\": %s,\n"
+                                   "  \"noclip_fly_speed\": %.3f\n}\n",
                                    settings.enabled ? "true" : "false",
                                    static_cast<double>(settings.distance),
                                    static_cast<unsigned>(settings.virtualKey),
                                    settings.noclipEnabled ? "true" : "false",
-                                   static_cast<unsigned>(settings.noclipToggleKey));
+                                   static_cast<unsigned>(settings.noclipToggleKey),
+                                   settings.noclipFlyEnabled ? "true" : "false",
+                                   static_cast<double>(settings.noclipFlySpeed));
     if (size <= 0) {
         return false;
     }
