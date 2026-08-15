@@ -1,4 +1,7 @@
-// Movement controls whose changes are persisted immediately.
+/**
+ * The teleport module's interface. Every control writes the configuration straight to disk, so a
+ * change made here survives the next launch without a settings edit.
+ */
 
 #include "teleport_panel.h"
 
@@ -84,17 +87,7 @@ void key_name(std::uint32_t virtualKey, std::array<char, kKeyNameCapacity>& outp
     return false;
 }
 
-/**
- * Draws one key picker while keeping capture ownership exclusive.
- * @param id ImGui identity
- * for the button.
- * @param target Binding this picker captures.
- * @param virtualKey Binding value
- * to display and update.
- * @param width Button width.
- * @return True when a new binding was
- * captured.
- */
+/** Draws one key picker while keeping capture ownership exclusive. */
 [[nodiscard]] bool
 key_picker(const char* id, CaptureTarget target, std::uint32_t& virtualKey, float width) noexcept {
     ImGui::PushID(id);
@@ -167,8 +160,8 @@ void draw() noexcept {
     ImGui::Spacing();
     ImGui::TextUnformatted("Noclip");
     ImGui::Separator();
-    ImGui::TextWrapped("Uses native horizontal rigid-body velocity while preserving the game's "
-                       "vertical movement.");
+    ImGui::TextWrapped("Normal mode bypasses horizontal collision. Fly mode controls all axes, "
+                       "including vertical movement, and prevents falling.");
     ImGui::Spacing();
 
     changed = core::ui::components::toggle::control("Available", settings.noclipEnabled) || changed;
@@ -186,6 +179,24 @@ void draw() noexcept {
     changed =
         key_picker("noclip_key", CaptureTarget::noclip, settings.noclipToggleKey, controlWidth)
         || changed;
+
+    ImGui::Spacing();
+    changed = core::ui::components::toggle::control("Fly mode", settings.noclipFlyEnabled) || changed;
+
+    ImGui::Spacing();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Fly speed");
+    ImGui::SameLine(labelWidth);
+    ImGui::SetNextItemWidth(controlWidth);
+    float flySpeed = settings.noclipFlySpeed;
+    if (ImGui::SliderFloat("##noclip_fly_speed",
+                           &flySpeed,
+                           client::teleport::kMinimumNoclipFlySpeed,
+                           client::teleport::kMaximumNoclipFlySpeed,
+                           "%.0f units/s")) {
+        settings.noclipFlySpeed = flySpeed;
+        changed = true;
+    }
 
     if (changed && !client::teleport::publish(settings)) {
         ImGui::Spacing();

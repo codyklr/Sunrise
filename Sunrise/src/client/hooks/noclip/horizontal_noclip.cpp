@@ -1,7 +1,6 @@
 /**
- * Horizontal noclip at the Havok simulation boundary. The hook reads native horizontal velocity
- * before simulation, lets Havok run normally, then replaces the character body's resolved X/Y
- * position before Destiny publishes it.
+ * Noclip at the Havok simulation boundary. Ordinary mode replaces collision-resolved X/Y
+ * position. Fly mode owns all three position lanes and clears native velocity after simulation.
  */
 
 #include <Windows.h>
@@ -11,15 +10,21 @@
 #include <atomic>
 #include <bit>
 #include <cstddef>
+#include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 #include <string_view>
 
 #include "../../../core/logging/log.h"
 #include "../../../core/ui/runtime/ui_visibility_runtime.h"
+#include "../../../state/account/account_state.h"
+#include "../../../state/runtime/runtime.h"
 #include "../../hooking/detour.h"
 #include "../../patterns/image_scan.h"
 #include "../../teleport/teleport_settings_store.h"
+#include "../teleport/runtime.h"
 #include "runtime.h"
 
 namespace sunrise::client::hooks::noclip {
@@ -71,6 +76,8 @@ constexpr std::int32_t kMaximumEntityCount = 65536;
 constexpr float kMaximumStepSeconds = 0.05F;
 /** Native velocity below this magnitude is treated as stationary. */
 constexpr float kMinimumVelocitySquared = 0.000001F;
+/** Horizontal camera direction must have this magnitude before it can be normalised. */
+constexpr float kMinimumHeadingSquared = 0.000001F;
 
 using HavokStep = std::int32_t(__fastcall*)(std::byte*, float);
 
@@ -86,8 +93,11 @@ std::atomic_bool g_installed{false};
 std::atomic_bool g_active{false};
 std::atomic_bool g_toggleDown{false};
 std::atomic_bool g_targetValid{false};
-/** The two target floats are one atomic publication, so readers never observe mixed coordinates. */
+std::atomic_bool g_flyMode{false};
+/** The two horizontal target floats are one atomic publication, so readers never observe mixed coordinates. */
 std::atomic<std::uint64_t> g_horizontalTarget{};
+/** Vertical target lane published independently from the horizontal pair. */
+std::atomic<std::uint32_t> g_verticalTarget{};
 /** Module-owned vtable target; unlike Havok objects, its address is stable until DLL teardown. */
 std::uintptr_t g_characterMotionVtable{};
 hooking::detour::Handle g_stepHandle{};
@@ -158,6 +168,62 @@ template <typename T> [[nodiscard]] T& field(std::byte* object, std::size_t offs
     return std::bit_cast<std::array<float, 2>>(value);
 }
 
+/** @return True when either half of an authored game binding is currently held. */
+[[nodiscard]] bool binding_down(const state::account::settings::bindings::Binding& binding) noexcept {
+    const auto down = [](const std::optional<std::uint16_t>& authored) noexcept {
+        return authored.has_value()
+               && hooks::teleport::action_key(*authored) != 0
+               && (GetAsyncKeyState(static_cast<int>(hooks::teleport::action_key(*authored))) & 0x8000) != 0;
+    };
+    return down(binding.primary) || down(binding.secondary);
+}
+
+/** Builds a normalised three-dimensional free-flight direction from configured game bindings. */
+[[nodiscard]] std::array<float, 3> flight_direction() noexcept {
+    if (core::ui::runtime::snapshot().visible) {
+        return {};
+    }
+    const state::AccountState account = state::account_snapshot();
+    using Action = state::account::settings::bindings::Action;
+    const auto held = [&account](Action action) noexcept {
+        return binding_down(account.settings.keyBindings.values[static_cast<std::size_t>(action)]);
+    };
+    const float forward = (held(Action::moveForward) ? 1.0F : 0.0F)
+                          - (held(Action::moveBackward) ? 1.0F : 0.0F);
+    const float strafe = (held(Action::moveRight) ? 1.0F : 0.0F)
+                         - (held(Action::moveLeft) ? 1.0F : 0.0F);
+    // The default crouch binding is Control. Keep that direct fallback because the game may
+    // consume the authored toggle action before this post-simulation hook polls it.
+    const bool crouching = held(Action::toggleCrouch) || held(Action::holdCrouch)
+                            || (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+    const float vertical = (held(Action::jump) ? 1.0F : 0.0F) - (crouching ? 1.0F : 0.0F);
+    std::array<float, 3> direction{0.0F, 0.0F, vertical};
+    std::array<float, 2> camera{};
+    if ((forward != 0.0F || strafe != 0.0F)
+        && hooks::teleport::horizontal_camera_forward(camera)) {
+        const float headingSquared = camera[0] * camera[0] + camera[1] * camera[1];
+        if (headingSquared > kMinimumHeadingSquared) {
+            const float inverseLength = 1.0F / std::sqrt(headingSquared);
+            const float forwardX = camera[0] * inverseLength;
+            const float forwardY = camera[1] * inverseLength;
+            // Destiny's horizontal basis uses the opposite handedness from the conventional
+            // XY cross-product, so this is the player's right vector rather than its left.
+            direction[0] += forwardX * forward + forwardY * strafe;
+            direction[1] += forwardY * forward - forwardX * strafe;
+        }
+    }
+    const float lengthSquared = direction[0] * direction[0] + direction[1] * direction[1]
+                                + direction[2] * direction[2];
+    if (lengthSquared <= 0.0F) {
+        return {};
+    }
+    const float inverseLength = 1.0F / std::sqrt(lengthSquared);
+    for (float& lane : direction) {
+        lane *= inverseLength;
+    }
+    return direction;
+}
+
 /** Polls the configured edge-triggered toggle on the physics thread. */
 void poll_toggle() noexcept {
     const client::teleport::Settings settings = client::teleport::get();
@@ -191,15 +257,20 @@ void poll_toggle() noexcept {
     }
 }
 
-/** Runs Havok normally, then replaces collision-resolved horizontal position for the character. */
+/** Runs Havok normally, then applies horizontal noclip or a full three-dimensional flight target. */
 std::int32_t __fastcall havok_step(std::byte* simulation, float deltaTime) noexcept {
     poll_toggle();
+    const client::teleport::Settings settings = client::teleport::get();
+    const bool flying = settings.noclipFlyEnabled;
+    if (flying != g_flyMode.exchange(flying, std::memory_order_acq_rel)) {
+        invalidate_target();
+    }
 
     std::array<float, kVectorLanes> nativeVelocity{};
     const bool enabledBeforeStep = active();
     std::byte* const before = enabledBeforeStep ? character_body(simulation) : nullptr;
     const bool hasVelocity = before != nullptr;
-    if (hasVelocity) {
+    if (hasVelocity && !flying) {
         nativeVelocity = field<std::array<float, kVectorLanes>>(before, kBodyVelocity);
     }
 
@@ -227,14 +298,36 @@ std::int32_t __fastcall havok_step(std::byte* simulation, float deltaTime) noexc
     if (!g_targetValid.load(std::memory_order_acquire)) {
         g_horizontalTarget.store(pack_target(position[kHorizontalX], position[kHorizontalY]),
                                  std::memory_order_relaxed);
+        g_verticalTarget.store(std::bit_cast<std::uint32_t>(position[2]), std::memory_order_relaxed);
         g_targetValid.store(true, std::memory_order_release);
-        return result;
-    }
-    if (!hasVelocity) {
         return result;
     }
 
     const float step = std::clamp(deltaTime, 0.0F, kMaximumStepSeconds);
+    if (flying) {
+        const std::array<float, 3> direction = flight_direction();
+        const std::array<float, 2> target =
+            unpack_target(g_horizontalTarget.load(std::memory_order_acquire));
+        const float speed = settings.noclipFlySpeed * step;
+        const float targetX = target[kHorizontalX] + direction[0] * speed;
+        const float targetY = target[kHorizontalY] + direction[1] * speed;
+        const float targetZ = std::bit_cast<float>(g_verticalTarget.load(std::memory_order_acquire))
+                              + direction[2] * speed;
+        position[kHorizontalX] = targetX;
+        position[kHorizontalY] = targetY;
+        position[2] = targetZ;
+        field<std::array<float, kVectorLanes>>(body, kBodyPosition) = position;
+        // No native velocity is retained in Fly mode, so gravity and collision cannot pull the
+        // target back between steps when no movement key is held.
+        field<std::array<float, kVectorLanes>>(body, kBodyVelocity) = {};
+        g_horizontalTarget.store(pack_target(targetX, targetY), std::memory_order_release);
+        g_verticalTarget.store(std::bit_cast<std::uint32_t>(targetZ), std::memory_order_release);
+        return result;
+    }
+
+    if (!hasVelocity) {
+        return result;
+    }
     const float velocitySquared = nativeVelocity[kHorizontalX] * nativeVelocity[kHorizontalX]
                                   + nativeVelocity[kHorizontalY] * nativeVelocity[kHorizontalY];
     if (step <= 0.0F || velocitySquared <= kMinimumVelocitySquared) {
@@ -316,6 +409,9 @@ void uninstall() noexcept {
 void reset() noexcept {
     g_active.store(false, std::memory_order_release);
     g_toggleDown.store(false, std::memory_order_release);
+    g_flyMode.store(false, std::memory_order_release);
+    g_horizontalTarget.store(0, std::memory_order_release);
+    g_verticalTarget.store(0, std::memory_order_release);
     invalidate_target();
 }
 
